@@ -82,7 +82,7 @@ struct LogEntry *parse_logs(char *filename, int *logs_len) {
   return entries;
 }
 
-void create_summary(struct LogEntry *logs, int len) {
+void print_summary(struct LogEntry *logs, int len) {
   int failed = 0;
   int unauthed = 0;
   int counts[len];
@@ -101,13 +101,13 @@ void create_summary(struct LogEntry *logs, int len) {
       failed += 1;
     }
 
-    // Count occurrences of each IP address
+    // Get max IP occurance
     int found = 0;
     for (int j = 0; j < unique_ip_count; j++) {
       if (strcmp(logs[i].remote_addr, ip_addresses[j]) == 0) {
         counts[j]++;
         found = 1;
-        // Check if this IP now has the maximum count
+
         if (counts[j] > max_count) {
           max_count = counts[j];
           strcpy(most_frequent_ip, ip_addresses[j]);
@@ -134,11 +134,81 @@ void create_summary(struct LogEntry *logs, int len) {
     printf("Excessive activity from %s with %d tries\n", most_frequent_ip,
            max_count);
   }
-  printf("Summary:\n\tFailed attempts: %d\n\tUnauthorized access: %d\n", failed,
+  printf("\tFailed attempts: %d\n\tUnauthorized access: %d\n", failed,
          unauthed);
 }
 
+struct LogEntry *filter_logs(struct LogEntry *logs, int *len,
+                             struct LogEntry *filters) {
+  int new_len = 0;
+  int capacity = 100;
+  struct LogEntry *output = malloc(sizeof(struct LogEntry) * capacity);
+  if (!output) {
+    perror("Memory allocation failed");
+    return NULL;
+  }
+
+  for (int i = 0; i < *len; i++) {
+    struct LogEntry entry = logs[i];
+
+    if (i >= capacity) {
+      capacity *= 2;
+      struct LogEntry *temp_output =
+          realloc(output, sizeof(struct LogEntry) * capacity);
+      if (!output) {
+        perror("Could not allocate more memory");
+        free(output);
+        return NULL;
+      }
+      output = temp_output;
+    }
+
+    // Check if filters are valid, then us them
+    if ((filters->remote_addr[0] != '\0' &&
+         strcmp(entry.remote_addr, filters->remote_addr) == 0) ||
+        (filters->timestamp[0] != '\0' &&
+         strcmp(entry.timestamp, filters->timestamp) == 0) ||
+        (filters->request[0] != '\0' &&
+         strcmp(entry.request, filters->request) == 0) ||
+        (filters->status != 0 && entry.status == filters->status) ||
+        (filters->bytes_sent != 0 && entry.bytes_sent == filters->bytes_sent) ||
+        (filters->http_referer[0] != '\0' &&
+         strcmp(entry.http_referer, filters->http_referer) == 0) ||
+        (filters->http_user_agent[0] != '\0' &&
+         strcmp(entry.http_user_agent, filters->http_user_agent) == 0) ||
+        (filters->http_x_forwarded_for[0] != '\0' &&
+         strcmp(entry.http_x_forwarded_for, filters->http_x_forwarded_for) ==
+             0)) {
+      new_len++;
+      output[new_len] = entry;
+    }
+  }
+  *len = new_len;
+  return output;
+}
+
+void print_help() {
+  printf("Option:\n\t-p, Print all parsed logs\n");
+  printf("\t-a <address>, Filter by Remote Address\n");
+  printf("\t-u <user>, Filter by Remote User\n");
+  printf("\t-t <timestamp>, Filter by Timestamp\n");
+  printf("\t-r <request>, Filter by client Request\n");
+  printf("\t-s <status>, Filter by request Status\n");
+  printf("\t-b <bytes size>, Filter by Bytes sent\n");
+  printf("\t-f <referer>, Filter by Referer\n");
+  printf("\t-g <user agent>, Filter by User Agent\n");
+  printf("\t-x <forworder for>, Filter by X Forwarder For\n");
+  return;
+}
+
 int main(int argc, char *argv[]) {
+
+  if (argc < 2) {
+    printf("Usage: %s <config.json> [options]\n", argv[0]);
+    print_help();
+    return 1;
+  }
+
   char *filename = "/var/log/nginx/access.log";
   int len = 0;
   struct LogEntry *logs = parse_logs(filename, &len);
@@ -147,23 +217,71 @@ int main(int argc, char *argv[]) {
   }
 
   int opt;
-  int chosen = 0;
-  while ((opt = getopt(argc, argv, "s")) != -1) {
+  int do_print = 0;
+  struct LogEntry filters = {0};
+
+  while ((opt = getopt(argc, argv, "pa:u:t:r:s:b:f:g:x:")) != -1) {
     switch (opt) {
-    case 's':
-      create_summary(logs, len);
-      chosen = 1;
+    case 'p':
+      do_print = 1;
       break;
-      optind++;
+    case 'a':
+      printf("Remote Address: %s\n", optarg);
+      strncpy(filters.remote_addr, optarg, MAX_IP_LENGTH);
+      break;
+    case 'u':
+      printf("Remote User: %s\n", optarg);
+      strncpy(filters.remote_user, optarg, MAX_LENGTH);
+      break;
+    case 't':
+      printf("Timestamp: %s\n", optarg);
+      strncpy(filters.timestamp, optarg, MAX_LENGTH);
+      break;
+    case 'r':
+      printf("Client Request: %s\n", optarg);
+      strncpy(filters.request, optarg, MAX_LENGTH);
+      break;
+    case 's':
+      printf("Request Status: %s\n", optarg);
+      filters.status = atoi(optarg);
+      break;
+    case 'b':
+      printf("Bytes sent: %s\n", optarg);
+      filters.bytes_sent = atoi(optarg);
+      break;
+    case 'f':
+      printf("Referer: %s\n", optarg);
+      strncpy(filters.http_referer, optarg, MAX_LENGTH);
+      break;
+    case 'g':
+      printf("User Agent: %s\n", optarg);
+      strncpy(filters.http_user_agent, optarg, MAX_LENGTH);
+      break;
+    case 'x':
+      printf("X Forwarder For: %s\n", optarg);
+      strncpy(filters.http_x_forwarded_for, optarg, MAX_LENGTH);
+      break;
+    default:
+      fprintf(stderr, "Unknown option: %c\n", optopt);
+      printf("Usage: %s <config.json> [options]\n", argv[0]);
+      print_help();
+      break;
     }
   }
 
-  if (!chosen) {
-    printf("Usage: %s <config.json> [options]\n", argv[0]);
-    printf("Option:\n\t-s, Print the summary");
-    return 1;
+  struct LogEntry *filtered_logs = filter_logs(logs, &len, &filters);
+  if (do_print) {
+    printf("-------------------------------Filtered "
+           "Output-------------------------------\n");
+    for (int i = 0; i < len; i++) {
+      print_log(&filtered_logs[i]);
+    }
   }
+  printf("-------------------------------Summary-------------------------------"
+         "\n");
+  print_summary(filtered_logs, len);
 
+  free(filtered_logs);
   free(logs);
   return 0;
 }
