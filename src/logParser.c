@@ -23,6 +23,13 @@ struct Config {
   int logs_cleanup_time;
 };
 
+struct Alerts {
+  int failed_attempts;
+  int unauthorized;
+  char sus_ip[MAX_IP_LENGTH];
+  int sus_ip_attempts;
+};
+
 void print_log(const struct LogEntry *entry) {
   printf("<=======================================================>\n");
   printf("Remote Address:\t%s\n", entry->remote_addr);
@@ -87,23 +94,19 @@ struct LogEntry *parse_logs(char *filename, int *logs_len) {
   return entries;
 }
 
-void print_summary(struct LogEntry *logs, int len) {
-  int failed = 0;
-  int unauthed = 0;
+struct Alerts create_alerts(struct LogEntry *logs, int len) {
+  struct Alerts alert;
   int counts[len];
   char ip_addresses[len][MAX_IP_LENGTH];
   int unique_ip_count = 0;
-
-  char most_frequent_ip[MAX_IP_LENGTH];
-  int max_count = 0;
 
   for (int i = 0; i < len; i++) {
     int status = logs[i].status;
     // 401 Unauthorized or 403 Forbidden
     if (status == 401 || status == 403) {
-      unauthed += 1;
+      alert.unauthorized += 1;
     } else if (status >= 400 && status < 500) {
-      failed += 1;
+      alert.failed_attempts += 1;
     }
 
     // Get max IP occurance
@@ -113,9 +116,9 @@ void print_summary(struct LogEntry *logs, int len) {
         counts[j]++;
         found = 1;
 
-        if (counts[j] > max_count) {
-          max_count = counts[j];
-          strcpy(most_frequent_ip, ip_addresses[j]);
+        if (counts[j] > alert.sus_ip_attempts) {
+          alert.sus_ip_attempts = counts[j];
+          strcpy(alert.sus_ip, ip_addresses[j]);
         }
         break;
       }
@@ -126,21 +129,14 @@ void print_summary(struct LogEntry *logs, int len) {
         strcpy(ip_addresses[unique_ip_count], logs[i].remote_addr);
         counts[unique_ip_count] = 1;
 
-        if (counts[unique_ip_count] > max_count) {
-          max_count = counts[unique_ip_count];
-          strcpy(most_frequent_ip, ip_addresses[unique_ip_count]);
+        if (counts[unique_ip_count] > alert.sus_ip_attempts) {
+          alert.sus_ip_attempts = counts[unique_ip_count];
+          strcpy(alert.sus_ip, ip_addresses[unique_ip_count]);
         }
         unique_ip_count++;
       }
     }
   }
-
-  if (max_count > 0) {
-    printf("Excessive activity from %s with %d tries\n", most_frequent_ip,
-           max_count);
-  }
-  printf("\tFailed attempts: %d\n\tUnauthorized access: %d\n", failed,
-         unauthed);
 }
 
 struct LogEntry *filter_logs(struct LogEntry *logs, int *len,
@@ -251,13 +247,13 @@ int main(int argc, char *argv[]) {
   }
 
   int opt;
-  int do_print = 0;
+  int print_filtered_logs = 0;
   struct LogEntry filters = {0};
 
   while ((opt = getopt(argc, argv, "pa:u:t:r:s:b:f:g:x:")) != -1) {
     switch (opt) {
     case 'p':
-      do_print = 1;
+      print_filtered_logs = 1;
       break;
     case 'a':
       printf("Remote Address: %s\n", optarg);
@@ -304,16 +300,16 @@ int main(int argc, char *argv[]) {
   }
 
   struct LogEntry *filtered_logs = filter_logs(logs, &len, &filters);
-  if (do_print) {
-    printf("-------------------------------Filtered "
-           "Output-------------------------------\n");
+  if (print_filtered_logs) {
+    printf("---------------Filtered Logs---------------");
     for (int i = 0; i < len; i++) {
       print_log(&filtered_logs[i]);
     }
   }
-  printf("-------------------------------Summary-------------------------------"
-         "\n");
-  print_summary(filtered_logs, len);
+  printf("---------------Summary---------------\n");
+  struct Alerts alerts = create_alerts(filtered_logs, len);
+  printf("Failed attempts:\t%d\nUnauthorized access:\t%d\n",
+         alerts.failed_attempts, alerts.unauthorized);
 
   free(filtered_logs);
   free(logs);
