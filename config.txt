@@ -1,3 +1,2 @@
 max_failed_attempts = 5
-logs_cleanup_time = 5
-
+max_unauthorized = 5

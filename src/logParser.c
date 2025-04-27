@@ -1,10 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <unistd.h>
 
 #define MAX_LENGTH 512
-#define MAX_IP_LENGTH 16
+#define MAX_IP_LENGTH 45
 
 struct LogEntry {
   char remote_addr[MAX_IP_LENGTH];
@@ -20,7 +21,7 @@ struct LogEntry {
 
 struct Config {
   int max_failed_attempts;
-  int logs_cleanup_time;
+  int max_unauthorized;
 };
 
 struct Alerts {
@@ -95,7 +96,7 @@ struct LogEntry *parse_logs(char *filename, int *logs_len) {
 }
 
 struct Alerts create_alerts(struct LogEntry *logs, int len) {
-  struct Alerts alert;
+  struct Alerts alert = {};
   int counts[len];
   char ip_addresses[len][MAX_IP_LENGTH];
   int unique_ip_count = 0;
@@ -137,6 +138,7 @@ struct Alerts create_alerts(struct LogEntry *logs, int len) {
       }
     }
   }
+  return alert;
 }
 
 struct LogEntry *filter_logs(struct LogEntry *logs, int *len,
@@ -212,8 +214,8 @@ struct Config parse_config(FILE *fptr) {
     char *value = strtok(NULL, delimter);
     if (strcmp(key, "max_failed_attempts") == 0) {
       config.max_failed_attempts = atoi(value);
-    } else if (strcmp(key, "logs_cleanup_time") == 0) {
-      config.logs_cleanup_time = atoi(value);
+    } else if (strcmp(key, "max_unauthorized") == 0) {
+      config.max_unauthorized = atoi(value);
     }
   }
 
@@ -248,6 +250,7 @@ int main(int argc, char *argv[]) {
 
   int opt;
   int print_filtered_logs = 0;
+  int is_filtered = 0;
   struct LogEntry filters = {0};
 
   while ((opt = getopt(argc, argv, "pa:u:t:r:s:b:f:g:x:")) != -1) {
@@ -257,38 +260,47 @@ int main(int argc, char *argv[]) {
       break;
     case 'a':
       printf("Remote Address: %s\n", optarg);
+      is_filtered = 1;
       strncpy(filters.remote_addr, optarg, MAX_IP_LENGTH);
       break;
     case 'u':
       printf("Remote User: %s\n", optarg);
+      is_filtered = 1;
       strncpy(filters.remote_user, optarg, MAX_LENGTH);
       break;
     case 't':
       printf("Timestamp: %s\n", optarg);
+      is_filtered = 1;
       strncpy(filters.timestamp, optarg, MAX_LENGTH);
       break;
     case 'r':
       printf("Client Request: %s\n", optarg);
+      is_filtered = 1;
       strncpy(filters.request, optarg, MAX_LENGTH);
       break;
     case 's':
       printf("Request Status: %s\n", optarg);
+      is_filtered = 1;
       filters.status = atoi(optarg);
       break;
     case 'b':
       printf("Bytes sent: %s\n", optarg);
+      is_filtered = 1;
       filters.bytes_sent = atoi(optarg);
       break;
     case 'f':
       printf("Referer: %s\n", optarg);
+      is_filtered = 1;
       strncpy(filters.http_referer, optarg, MAX_LENGTH);
       break;
     case 'g':
       printf("User Agent: %s\n", optarg);
+      is_filtered = 1;
       strncpy(filters.http_user_agent, optarg, MAX_LENGTH);
       break;
     case 'x':
       printf("X Forwarder For: %s\n", optarg);
+      is_filtered = 1;
       strncpy(filters.http_x_forwarded_for, optarg, MAX_LENGTH);
       break;
     default:
@@ -299,9 +311,15 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  struct LogEntry *filtered_logs = filter_logs(logs, &len, &filters);
+  struct LogEntry *filtered_logs;
+  if (is_filtered) {
+    filtered_logs = filter_logs(logs, &len, &filters);
+  } else {
+    filtered_logs = logs;
+  }
+
   if (print_filtered_logs) {
-    printf("---------------Filtered Logs---------------");
+    printf("---------------Filtered Logs---------------\n");
     for (int i = 0; i < len; i++) {
       print_log(&filtered_logs[i]);
     }
@@ -311,7 +329,33 @@ int main(int argc, char *argv[]) {
   printf("Failed attempts:\t%d\nUnauthorized access:\t%d\n",
          alerts.failed_attempts, alerts.unauthorized);
 
-  free(filtered_logs);
+  FILE *fout = fopen("/var/log/nginx/alerts.txt", "w");
+  if (!fout) {
+    perror("Could not create alerts.txt file.");
+    free(filtered_logs);
+    free(logs);
+    return 1;
+  }
+
+  openlog("Nginx", LOG_PID | LOG_CONS, LOG_USER);
+  if (alerts.failed_attempts > config.max_failed_attempts) {
+    fprintf(fout, "Max Failed attempts exceeded. (%d attempts)\n",
+            alerts.failed_attempts);
+    syslog(LOG_WARNING, "Max Failed attempts exceeded.");
+  }
+  if (alerts.unauthorized > config.max_unauthorized) {
+    fprintf(fout, "Max Unauthorized attempts exceeded. (%d attempts)\n",
+            alerts.unauthorized);
+    syslog(LOG_WARNING, "Max Unauthorized attempts exceeded.");
+  }
+  if (alerts.sus_ip_attempts > 0) {
+    fprintf(fout, "IP with most requests is %s with %d attempts", alerts.sus_ip,
+            alerts.sus_ip_attempts);
+  }
+
+  if (filtered_logs != logs) {
+    free(filtered_logs);
+  }
   free(logs);
   return 0;
 }
