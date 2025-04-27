@@ -18,6 +18,11 @@ struct LogEntry {
   char http_x_forwarded_for[MAX_LENGTH];
 };
 
+struct Config {
+  int max_failed_attempts;
+  int logs_cleanup_time;
+};
+
 void print_log(const struct LogEntry *entry) {
   printf("<=======================================================>\n");
   printf("Remote Address:\t%s\n", entry->remote_addr);
@@ -188,6 +193,7 @@ struct LogEntry *filter_logs(struct LogEntry *logs, int *len,
 }
 
 void print_help() {
+  printf("\n==This program parses nginx access logs==\n");
   printf("Option:\n\t-p, Print all parsed logs\n");
   printf("\t-a <address>, Filter by Remote Address\n");
   printf("\t-u <user>, Filter by Remote User\n");
@@ -201,6 +207,23 @@ void print_help() {
   return;
 }
 
+struct Config parse_config(FILE *fptr) {
+  char delimter[4] = " = ";
+  char line[MAX_LENGTH];
+  struct Config config;
+  while (fgets(line, MAX_LENGTH, fptr) != NULL) {
+    char *key = strtok(line, delimter);
+    char *value = strtok(NULL, delimter);
+    if (strcmp(key, "max_failed_attempts") == 0) {
+      config.max_failed_attempts = atoi(value);
+    } else if (strcmp(key, "logs_cleanup_time") == 0) {
+      config.logs_cleanup_time = atoi(value);
+    }
+  }
+
+  return config;
+}
+
 int main(int argc, char *argv[]) {
 
   if (argc < 2) {
@@ -209,6 +232,17 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  // Parse config file
+  FILE *config_file = fopen(argv[1], "r");
+  if (!config_file) {
+    printf("Config file '%s' does not exist.\n", argv[1]);
+    printf("Usage: %s <config.json> [options]\n", argv[0]);
+    return 1;
+  }
+  struct Config config = parse_config(config_file);
+  fclose(config_file);
+
+  // Parse log file
   char *filename = "/var/log/nginx/access.log";
   int len = 0;
   struct LogEntry *logs = parse_logs(filename, &len);
