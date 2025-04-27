@@ -48,7 +48,7 @@ void print_log(const struct LogEntry *entry) {
 struct LogEntry *parse_logs(char *filename, int *logs_len) {
   FILE *fptr = fopen(filename, "r");
   if (!fptr) {
-    perror("Could not open fptr");
+    perror("Could not open log file");
     return NULL;
   }
 
@@ -329,7 +329,7 @@ int main(int argc, char *argv[]) {
   printf("Failed attempts:\t%d\nUnauthorized access:\t%d\n",
          alerts.failed_attempts, alerts.unauthorized);
 
-  FILE *fout = fopen("/var/log/nginx/alerts.txt", "w");
+  FILE *fout = fopen("alerts.txt", "a");
   if (!fout) {
     perror("Could not create alerts.txt file.");
     free(filtered_logs);
@@ -337,7 +337,8 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  openlog("Nginx", LOG_PID | LOG_CONS, LOG_USER);
+  fprintf(fout, "=========%s=========\n", filtered_logs[len - 1].timestamp);
+  openlog("nginx", LOG_PID | LOG_CONS, LOG_USER);
   if (alerts.failed_attempts > config.max_failed_attempts) {
     fprintf(fout, "Max Failed attempts exceeded. (%d attempts)\n",
             alerts.failed_attempts);
@@ -349,8 +350,8 @@ int main(int argc, char *argv[]) {
     syslog(LOG_WARNING, "Max Unauthorized attempts exceeded.");
   }
   if (alerts.sus_ip_attempts > 0) {
-    fprintf(fout, "IP with most requests is %s with %d attempts", alerts.sus_ip,
-            alerts.sus_ip_attempts);
+    fprintf(fout, "IP with most requests is %s with %d attempts\n",
+            alerts.sus_ip, alerts.sus_ip_attempts);
   }
 
   if (filtered_logs != logs) {
